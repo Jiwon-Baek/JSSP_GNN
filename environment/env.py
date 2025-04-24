@@ -706,7 +706,7 @@ class QuayScheduling:
                 initial_ship = self.df_initial[self.df_initial["Ship_Name"] == ship_name]
                 initial_operation = initial_ship["Operation_Type"].to_list()[0]
                 initial_step = initial_ship["Order"].tolist()[0] - 1
-                initial_quay = initial_ship["Quay_Assigned"].tolist()[0]
+                initial_quay = initial_ship["Initial_Quay"].tolist()[0]
 
                 if initial_quay == "S":
                     if self.numerical_encoding:

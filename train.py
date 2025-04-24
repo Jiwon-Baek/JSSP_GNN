@@ -4,7 +4,8 @@ import json
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 
-from cfg_train import get_cfg
+# from cfg_train import get_cfg
+from cfg_debug import Configure
 from agent.ppo import *
 from environment.data import DataGenerator
 from environment.env import *
@@ -55,7 +56,7 @@ def evaluate(val_dir):
 
 if __name__ == "__main__":
     date = datetime.now().strftime('%m%d_%H_%M')
-    cfg = get_cfg()
+    cfg = Configure()
     if cfg.vessl == 1:
         import vessl
         vessl.init(organization="snu-eng-dgx", project="quay", hp=cfg)
