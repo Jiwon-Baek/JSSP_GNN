@@ -29,24 +29,20 @@ def evaluate(val_dir):
             while not done:
                 action, _, _ = agent.get_action(state, mask, current_ops, added_info)
                 next_state, reward, done, next_mask, next_current_ops, next_added_info = test_env.step(action)
-
                 state = next_state
                 mask = next_mask
                 current_ops = next_current_ops
                 added_info = next_added_info
 
                 if done:
-                    # log = test_env.get_logs()
                     break
 
             delay = sum(test_env.monitor.delay.values()) / len(test_env.monitor.delay.values())
             move = sum(test_env.monitor.move.values()) / len(test_env.monitor.move.values())
             priority_ratio = sum(test_env.monitor.priority_ratio.values()) / len(test_env.monitor.priority_ratio.values())
-
             average_delay_lst.append(delay)
             average_move_lst.append(move)
             average_priority_ratio_lst.append(priority_ratio)
-
         average_delay = sum(average_delay_lst) / len(average_delay_lst)
         average_move = sum(average_move_lst) / len(average_move_lst)
         average_priority_ratio = sum(average_priority_ratio_lst) / len(average_priority_ratio_lst)

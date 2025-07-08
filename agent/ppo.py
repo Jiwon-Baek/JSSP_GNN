@@ -46,10 +46,54 @@ class Agent:
         self.optimizer = optim.Adam(self.network.parameters(), lr=lr)
         self.scheduler = StepLR(optimizer=self.optimizer, step_size=lr_step, gamma=lr_decay)
 
+    def get_action(self, s, mask, current_ops, added_info):
+        self.network.eval()
+        with torch.no_grad():
+            a, log_p, v = self.network.act(s, mask, current_ops, added_info)
+        return a, log_p, v
+
     def put_data(self, transition):
         self.data.append(transition)
 
-    def make_batch(self):
+    def train(self):
+        self.network.train()
+        s, info, a, r, s_prime, info_prime, a_logprob, v, mask, current_ops, done = self._make_batch()
+        avg_loss = 0.0
+
+        for i in range(self.K_epoch):
+            td_target = r + self.gamma * v * done
+            delta = td_target - v
+
+            advantage_lst = []
+            advantage = 0.0
+            for delta_t in delta.flip(dims=(0,)):
+                advantage = self.gamma * self.lmbda * advantage + delta_t
+                advantage_lst.append(advantage)
+            advantage_lst.reverse()
+            advantage = torch.concat(advantage_lst).unsqueeze(-1).to(self.device)
+
+            new_a_logprob, new_v, dist_entropy = self.network.evaluate(s, a, mask, current_ops, info)
+            ratio = torch.exp(new_a_logprob - a_logprob)
+
+            surr1 = ratio * advantage
+            surr2 = torch.clamp(ratio, 1 - self.eps_clip, 1 + self.eps_clip) * advantage
+            loss = - self.P_coeff * torch.min(surr1, surr2) + self.V_coeff * F.smooth_l1_loss(new_v, td_target) - self.E_coeff * dist_entropy
+
+            self.optimizer.zero_grad()
+            loss.mean().backward()
+            self.optimizer.step()
+
+            avg_loss += loss.mean().item()
+
+        return avg_loss / self.K_epoch
+
+    def save_network(self, e, file_dir):
+        torch.save({"episode": e,
+                    "model_state_dict": self.network.state_dict(),
+                    "optimizer_state_dict": self.optimizer.state_dict()},
+                   file_dir + "episode%d.pt" % e)
+
+    def _make_batch(self):
         s_lst, info_lst, a_lst, r_lst, s_prime_lst, info_prime_lst, a_logprob_lst, v_lst, mask_lst, current_ops_lst, done_lst \
             = [], [], [], [], [], [], [], [], [], [], []
 
@@ -93,47 +137,3 @@ class Agent:
         self.data = []
 
         return s, info, a, r, s_prime, info_prime, a_logprob, v, mask, current_ops, done
-
-    def get_action(self, s, mask, current_ops, added_info):
-        self.network.eval()
-        with torch.no_grad():
-            a, log_p, v = self.network.act(s, mask, current_ops, added_info)
-        return a, log_p, v
-
-    def train(self):
-        self.network.train()
-        s, info, a, r, s_prime, info_prime, a_logprob, v, mask, current_ops, done = self.make_batch()
-        avg_loss = 0.0
-
-        for i in range(self.K_epoch):
-            td_target = r + self.gamma * v * done
-            delta = td_target - v
-
-            advantage_lst = []
-            advantage = 0.0
-            for delta_t in delta.flip(dims=(0,)):
-                advantage = self.gamma * self.lmbda * advantage + delta_t
-                advantage_lst.append(advantage)
-            advantage_lst.reverse()
-            advantage = torch.concat(advantage_lst).unsqueeze(-1).to(self.device)
-
-            new_a_logprob, new_v, dist_entropy = self.network.evaluate(s, a, mask, current_ops, info)
-            ratio = torch.exp(new_a_logprob - a_logprob)
-
-            surr1 = ratio * advantage
-            surr2 = torch.clamp(ratio, 1 - self.eps_clip, 1 + self.eps_clip) * advantage
-            loss = - self.P_coeff * torch.min(surr1, surr2) + self.V_coeff * F.smooth_l1_loss(new_v, td_target) - self.E_coeff * dist_entropy
-
-            self.optimizer.zero_grad()
-            loss.mean().backward()
-            self.optimizer.step()
-
-            avg_loss += loss.mean().item()
-
-        return avg_loss / self.K_epoch
-
-    def save_network(self, e, file_dir):
-        torch.save({"episode": e,
-                    "model_state_dict": self.network.state_dict(),
-                    "optimizer_state_dict": self.optimizer.state_dict()},
-                   file_dir + "episode%d.pt" % e)

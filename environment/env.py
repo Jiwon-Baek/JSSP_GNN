@@ -25,7 +25,7 @@ class QuayScheduling:
 
         if type(self.data_src) is DataGenerator:
             flag = True
-            while flag:
+            while flag: # 목표로 하는 난이도의 데이터가 얻어질 때까지 반복 시행
                 self.df_scenario, self.df_initial, self.df_quay = self.data_src.generate()
                 max_load = get_load_graph(self.df_scenario)
                 if len(self.df_quay.columns) * 0.8 <= max_load <= len(self.df_quay.columns) * 1.2:

@@ -25,7 +25,7 @@ class Scheduler(nn.Module):
         if use_gnn:
             self.conv = nn.ModuleList()
             for i in range(self.num_HGT_layers):
-                if i == 0:
+                if i == 0: # meta_data 형태로 노드와 엣지 정보를 pytorch에 줘야함
                     self.conv.append(HGTConv(self.state_size, embed_dim, meta_data, heads=num_heads))
                 else:
                     self.conv.append(HGTConv(embed_dim, embed_dim, meta_data, heads=num_heads))
@@ -73,14 +73,16 @@ class Scheduler(nn.Module):
 
         if self.use_gnn:
             for i in range(self.num_HGT_layers):
-                x_dict = self.conv[i](x_dict, edge_index_dict)
+                x_dict = self.conv[i](x_dict, edge_index_dict) # x_dict['quay'] = (28, 20) <- attention 일어나는 부분
                 x_dict = {key: F.elu(x) for key, x in x_dict.items()}
+            # x_dict['quay'] = (28, 128)
 
-            h_quays = x_dict["quay"]
-            if "operation" in self.meta_data[0]:
+            h_quays = x_dict["quay"] # 노드 타입별로 노드 feature 가 행렬형태로 저장, x['quay'] = (28, 128)
+            if "operation" in self.meta_data[0]: # self.meta_data : pytorch.geometric 으로 정의된 각 노드 타입의 개수
                 h_ops = x_dict["operation"]
             elif "ship" in self.meta_data[0]:
                 h_ships = x_dict["ship"]
+            # 그래프 종류를 기존 JSSP의 operation 기반 방식으로 했을 때 / ship-quay 로만 구성했을 때 2가지 구성해서 비교
         else:
             h_quays = x_dict["quay"]
             h_ops = x_dict["operation"]
@@ -90,40 +92,41 @@ class Scheduler(nn.Module):
                 h_ops = self.mlp_operation[i](h_ops)
                 h_ops = F.elu(h_ops)
 
-        h_quays_pooled = h_quays.mean(dim=-2)
+        h_quays_pooled = h_quays.mean(dim=-2) # 글로벌 정보 (?) 28개 안벽노드들의 평균값 (글로벌 정보)
         if "operation" in self.meta_data[0]:
-            h_ops_pooled = h_ops.mean(dim=-2)
-            ships_gather = current_ops.unsqueeze(-1).expand(-1, self.embed_dim)
+            h_ops_pooled = h_ops.mean(dim=-2) # 글로벌 정보
+            ships_gather = current_ops.unsqueeze(-1).expand(-1, self.embed_dim) # (80) ->(80, 128) h_ops 로부터 인덱싱해오려고
             h_ships = h_ops.gather(0, ships_gather)
         elif "ship" in self.meta_data[0]:
-            h_ships_pooled = h_ships.mean(dim=-2)
+            h_ships_pooled = h_ships.mean(dim=-2) # 글로벌 정보
 
-        h_ships_padding = h_ships.unsqueeze(-2).expand(-1, self.num_nodes["quay"], -1)
-        h_quays_padding = h_quays.unsqueeze(-3).expand_as(h_ships_padding)
+        h_ships_padding = h_ships.unsqueeze(-2).expand(-1, self.num_nodes["quay"], -1) # (80, 28, 128) 28을 추가
+        h_quays_padding = h_quays.unsqueeze(-3).expand_as(h_ships_padding) # (80, 28, 128) 80을 추가해줌
 
         # h_quays_pooled_padding = h_quays_pooled[None, None, :].expand_as(h_quays_padding)
         # h_ships_pooled_padding = h_ships_pooled[None, None, :].expand_as(h_ships_padding)
 
         if self.use_added_info:
-            h_added = added_info
+            h_added = added_info #(80, 28, 2)
             for i in range(self.num_HGT_layers):
                 h_added = self.fc[i](h_added)
-                h_added = F.elu(h_added)
-            h_actions = torch.cat((h_quays_padding, h_ships_padding, h_added), dim=-1)
+                h_added = F.elu(h_added) #(80, 28, 128)
+            h_actions = torch.cat((h_quays_padding, h_ships_padding, h_added), dim=-1) # (80, 28, 128*3)
         else:
-            h_actions = torch.cat((h_quays_padding, h_ships_padding), dim=-1)
+            h_actions = torch.cat((h_quays_padding, h_ships_padding), dim=-1) # (80, 28, 128*2)
 
         if "operation" in self.meta_data[0]:
-            h_pooled = torch.cat((h_quays_pooled, h_ops_pooled), dim=-1)
+            h_pooled = torch.cat((h_quays_pooled, h_ops_pooled), dim=-1) # (256 = 128+128)
         elif "ship" in self.meta_data[0]:
-            h_pooled = torch.cat((h_quays_pooled, h_ships_pooled), dim=-1)
+            h_pooled = torch.cat((h_quays_pooled, h_ships_pooled), dim=-1) # (256 = 128+128)
 
+        # Actor 연산
         for i in range(self.num_actor_layers):
             if i < len(self.actor) - 1:
-                h_actions = self.actor[i](h_actions)
+                h_actions = self.actor[i](h_actions)  # (80, 28, 128*3)
                 h_actions = F.elu(h_actions)
             else:
-                logits = self.actor[i](h_actions).flatten()
+                logits = self.actor[i](h_actions).flatten() # flatten(80*28)
 
         mask = mask.transpose(0, 1).flatten()
         logits[~mask] = float('-inf')
