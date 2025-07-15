@@ -23,6 +23,7 @@ class QuayScheduling:
         self.record_events = record_events
         self.device = device
 
+        # 1. set data generator type
         if type(self.data_src) is DataGenerator:
             flag = True
             while flag: # 목표로 하는 난이도의 데이터가 얻어질 때까지 반복 시행
@@ -35,20 +36,23 @@ class QuayScheduling:
             self.df_initial = pd.read_excel(data_src, sheet_name="initial", engine='openpyxl')
             self.df_quay = pd.read_excel(data_src, sheet_name="quay", engine='openpyxl').set_index(["선종", "작업"])
 
+        # 1-2. data 정렬
         self.df_scenario = self.df_scenario.sort_values(by=["Operation_Index"])
         self.df_quay = self.df_quay.sort_index(axis=1)
 
+        # 2. set numerical encoding
         if not self.df_quay.iloc[0].isin(["A", "B", "C", "D", "E", "N"]).any():
             self.numerical_encoding = True
         else:
             self.numerical_encoding = False
 
+        # 3. number parameters 계산
         self.num_of_ships = len(self.df_scenario["Ship_Name"].unique())
         self.num_of_ops = len(self.df_scenario)
         self.num_of_quays = len(self.df_quay.columns)
 
+        # 4. Initialize environment & parameters
         self.meta_data, self.state_size, self.num_nodes, self.quay_ids, self.ship_ids = self._initialize()
-
         self.actions_done = []
         self.decision_time = 0.0
 
@@ -56,7 +60,7 @@ class QuayScheduling:
         quay_id = action % self.num_nodes["quay"]
         ship_id = action // self.num_nodes["quay"]
         done = False
-
+        # print(f'{self.sim_env.now}\tNow Scheduled: Quay{quay_id}\tShip{ship_id}')
         self.actions_done.append(quay_id)
 
         ship = self.monitor.remove_queue(ship_id)
@@ -206,7 +210,7 @@ class QuayScheduling:
                          [("operation", "predecessor", "operation"),
                           ("operation", "good", "quay"), ("quay", "good_inv", "operation"),
                           ("operation", "bad", "quay"), ("quay", "bad_inv", "operation")])
-            state_size = {"quay": 4, "operation": 8}
+            state_size = {"quay": 4, "operation": 9} # MIO 를 넣기 위해 8->9로 수정
             num_nodes = {"quay": self.num_of_quays, "operation": self.num_of_ops}
 
         quay_ids = OrderedDict()
@@ -272,19 +276,40 @@ class QuayScheduling:
             # edge_pre, edge_suc = [[], []], [[], []]
         edge_good, edge_bad = [[], []], [[], []]
         edge_good_inv, edge_bad_inv = [[], []], [[], []]
-
+        # print(f'{self.sim_env.now}\tNow calculating the RL state...')
         current_ops = np.zeros(self.num_of_ships)
-
+        # MIO 계산
+        # ships_current_step = [ship.operation.index(ship.get_current_operation()) for ship in self.ships]
+        # ships_current_step = [ship.step for ship in self.ships]
+        # relative_urgency_idx = min(ships_current_step)
+        current_step = np.zeros(self.num_of_ships)
         for ship_idx, ship_name in self.ship_ids.items():
             if ship_idx in self.monitor.ships_before_LC.keys():
                 ship = self.monitor.ships_before_LC[ship_idx]
                 current_ops[ship.id] = ship.operations[0].id
+                current_step[ship.id] = -1
             elif ship_idx in self.monitor.ships_in_process.keys():
                 ship = self.monitor.ships_in_process[ship_idx]
                 current_ops[ship.id] = ship.operations[ship.step].id
+                current_step[ship.id] = ship.step
             else:
                 ship = self.monitor.ships_after_DL[ship_idx]
                 current_ops[ship.id] = ship.operations[-1].id
+                current_step[ship.id] = -1
+
+        # print(f'{self.sim_env.now}\tCurrent Step:',[int(c) for c in current_step.tolist()])
+        steps_in_process = [c for c in current_step.tolist() if c != -1]
+        if len(steps_in_process) == 0:
+            relative_urgency_idx = -1
+        else:
+            relative_urgency_idx = min(steps_in_process)
+        for ship_idx, ship_name in self.ship_ids.items():
+            if ship_idx in self.monitor.ships_before_LC.keys():
+                ship = self.monitor.ships_before_LC[ship_idx]
+            elif ship_idx in self.monitor.ships_in_process.keys():
+                ship = self.monitor.ships_in_process[ship_idx]
+            else:
+                ship = self.monitor.ships_after_DL[ship_idx]
 
             for i, operation in enumerate(ship.operations):
                 if self.state_encoding == "DG":
@@ -315,6 +340,16 @@ class QuayScheduling:
                     else:
                         X_ops[operation.id, 4:7] = [0, 0, 1]
                         X_ops[operation.id, 7] = 0
+
+
+                    if i != relative_urgency_idx: # i : relative position of the operation
+                        X_ops[operation.id, 8] = 0
+                    else:
+                        if current_step[ship.id] != -1:
+                            X_ops[operation.id, 8] = 1
+                        else:
+                            X_ops[operation.id, 8] = 0
+
 
                     if i > 0:
                         edge_pre[0].append(operation.id - 1)

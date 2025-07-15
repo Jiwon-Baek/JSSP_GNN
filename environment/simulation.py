@@ -222,6 +222,7 @@ class Quay:
             self.utilization += duration
             operation.progress += duration
             ship.step += 1
+            # print(f'{self.env.now}\tShip{ship.id} step increased by 1 (now:{ship.step})')
             if operation.finish_actual is None:
                 operation.finish_actual = self.env.now
             self.monitor.operations_done[operation.id] = operation
